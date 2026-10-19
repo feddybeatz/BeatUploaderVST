@@ -167,7 +167,7 @@ void BeatUploaderVSTAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     if(isRecording.load() && formatWriter != nullptr){
         //copy the numbers out of the current bucket(buffer) and write them to the file
 
-        formatWriter->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSample());
+        formatWriter->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
     }
     
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
