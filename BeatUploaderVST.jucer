@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <JUCERPROJECT id="nH4n6V" name="BeatUploader" projectType="audioplug" useAppConfig="0"
+              companyName="Feddy Beatz" companyWebsite="https://beatuploader-ten.vercel.app/"
+              companyEmail="beatzfeddy@gmail.com" pluginManufacturer="Feddy Beatz"
+              pluginManufacturerWebsite="https://beatuploader-ten.vercel.app/"
+              pluginManufacturerEmail="beatzfeddy@gmail.com"
               addUsingNamespaceToJuceHeader="0" jucerFormatVersion="1">
   <MAINGROUP id="EM5g6n" name="BeatUploader">
     <GROUP id="{87B7D2E4-9C55-B104-902D-CD8EF347F62A}" name="Source">

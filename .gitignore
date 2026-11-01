@@ -3,6 +3,9 @@ JuceLibraryCode/
 .vs/
 website/
 Source_backup/
+installer/Output/
+BeatUploader.exe
+BeatUploader.vst3/
 
 # Local OAuth credentials and token cache
 youtube_client.json
