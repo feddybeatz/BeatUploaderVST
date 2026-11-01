@@ -14,6 +14,7 @@ public:
     {
         bool ok = false;
         juce::String message;   // on success: channel name (connect) or video id (upload); otherwise the error
+        juce::String warning;   // upload succeeded but something minor failed (e.g. the thumbnail)
     };
 
     YouTubeUploader() = default;
@@ -29,7 +30,9 @@ public:
     Result connect();
 
     // Uploads the video. privacy: "private", "unlisted" or "public". On success, message = video id.
+    // thumbnail is optional: pass a non-existent File to skip it.
     Result upload (const juce::File& video,
+                   const juce::File& thumbnail,
                    const juce::String& title,
                    const juce::String& description,
                    const juce::StringArray& tags,
@@ -41,21 +44,16 @@ private:
         bool ok = false;
         int status = 0;
         juce::String body;
-        juce::String headers;
-        juce::String curlError;
     };
 
     juce::File getClientFile() const;
     juce::File getTokenFile() const;
     bool loadClient (juce::String& clientId, juce::String& clientSecret) const;
 
-    CurlResult runCurl (const juce::StringArray& extraArgs, int timeoutMs = 60000);
+    CurlResult runCurl (const juce::StringArray& extraArgs);
     CurlResult postForm (const juce::String& url, const juce::String& body);
     juce::String getAccessToken (juce::String& error);
 
-    bool saveTokens (const juce::var& tokenJson, const juce::String& channelName) const;
-    juce::String fetchChannelName (const juce::String& accessToken, juce::String& error);
-    juce::String waitForAuthCode (juce::StreamingSocket& listener,
-                                  const juce::String& expectedState,
-                                  juce::String& error);
+    juce::String uploadThumbnail (const juce::String& videoId, const juce::File& image,
+                                  const juce::File& authHeaderFile);   // "" = ok
 };

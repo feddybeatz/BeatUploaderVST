@@ -90,7 +90,9 @@ public:
         auto colour = (primary && enabled) ? background() : lime();
 
         g.setColour (colour.withAlpha (enabled ? 1.0f : 0.4f));
-        g.setFont (juce::FontOptions (primary ? 18.0f : 15.0f, juce::Font::bold));
+        g.setFont (juce::FontOptions (juce::jmin (primary ? 18.0f : 15.0f,
+                              (float) button.getHeight() * 0.55f),
+                          juce::Font::bold));
         g.drawFittedText (button.getButtonText(), button.getLocalBounds().reduced (8, 0),
                           juce::Justification::centred, 1);
     }

@@ -1,30 +1,18 @@
-﻿#include "PluginProcessor.h"
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
 
 namespace
 {
-    const juce::StringArray& getKeyNames()
-    {
-        static const juce::StringArray keys
-        {
-            "C Minor", "C# Minor", "D Minor", "Eb Minor", "E Minor", "F Minor",
-            "F# Minor", "G Minor", "G# Minor", "A Minor", "Bb Minor", "B Minor",
-            "C Major", "Db Major", "D Major", "Eb Major", "E Major", "F Major",
-            "F# Major", "G Major", "Ab Major", "A Major", "Bb Major", "B Major"
-        };
-        return keys;
-    }
+    // YouTube visibility for API uploads. Switch to "unlisted" after Google has audited the project.
+    const juce::String uploadPrivacy { "private" };
 
-    juce::String formatBpm (double bpm)
-    {
-        if (bpm <= 0.0)
-            return {};
+    // true: background video fills the frame. false: centered 1080 x 1080 square.
+    const bool videoFillsFrame = true;
 
-        if (std::abs (bpm - std::round (bpm)) < 0.01)
-            return juce::String (juce::roundToInt (bpm));
-
-        return juce::String (bpm, 1);
-    }
+    const char* const emptyBeatText  = "No beat selected";
+    const char* const emptyCoverText = "No cover selected";
+    const char* const emptyVideoText = "Optional: loops under your beat. Its own audio is muted.";
+    const char* const emptyThumbText = "Optional: YouTube thumbnail (JPG/PNG, max 2 MB)";
 
     juce::String cleanName (const juce::String& raw)
     {
@@ -35,22 +23,19 @@ namespace
     juce::String makeTitle (const juce::String& rawName)
     {
         auto title = "(FREE) Kehlani x Aaliyah R&B Type Beat - \"" + cleanName (rawName) + "\"";
-        return title.substring (0, 100);   // YouTube title limit
+        return title.substring (0, 100);
     }
 
     juce::StringArray makeTags()
     {
-        return
-        {
-            "kehlani type beat", "free kehlani type beat",
-            "kehlani type beat 2026", "free kehlani type beat 2026",
-            "kehlani type beat free 2026", "kehlani type beat free",
-            "r&b type beat", "free r&b type beat", "r&b type beat 2026",
-            "free r&b type beat 2026", "r&b type beat free 2026",
-            "aaliyah type beat", "free aaliyah type beat", "aaliyah type beat 2026",
-            "type beat", "free type beat", "type beat 2026", "free type beat 2026",
-            "type beat free", "beat", "beats", "type beats", "free type beats"
-        };
+        return { "kehlani type beat", "free kehlani type beat",
+                 "kehlani type beat 2026", "free kehlani type beat 2026",
+                 "kehlani type beat free 2026", "kehlani type beat free",
+                 "r&b type beat", "free r&b type beat", "r&b type beat 2026",
+                 "free r&b type beat 2026", "r&b type beat free 2026",
+                 "aaliyah type beat", "free aaliyah type beat", "aaliyah type beat 2026",
+                 "type beat", "free type beat", "type beat 2026", "free type beat 2026",
+                 "type beat free", "beat", "beats", "type beats", "free type beats" };
     }
 
     juce::String makeDescription (const juce::String& rawName)
@@ -74,20 +59,29 @@ namespace
                        "If you need a free r&b type beat 2026, a free type beat 2026, or just free type beats, this Kehlani instrumental delivers that signature warm melodic tone. "
                        "Whether you're searching for beats, type beats, or a free Kehlani type beat free, this is the beat for you.\n\n"
                     << "#kehlanitypebeat #aaliyahtypebeat  #rnbtypebeat #freetypebeat #typebeat\n";
-
         return description;
+    }
+
+    void showPicked (juce::Label& label, const juce::File& file)
+    {
+        label.setText (file.getFileName(), juce::dontSendNotification);
+        label.setColour (juce::Label::textColourId, ToxicColours::lime());
+    }
+
+    void showEmpty (juce::Label& label, const juce::String& text)
+    {
+        label.setText (text, juce::dontSendNotification);
+        label.setColour (juce::Label::textColourId, ToxicColours::muted());
     }
 
     void drawCard (juce::Graphics& g, juce::Rectangle<int> area, const juce::String& title)
     {
         using namespace ToxicColours;
-
-        auto r = area.toFloat();
+        auto bounds = area.toFloat();
         g.setColour (card());
-        g.fillRoundedRectangle (r, 10.0f);
+        g.fillRoundedRectangle (bounds, 10.0f);
         g.setColour (violet().withAlpha (0.35f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 10.0f, 1.0f);
-
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 10.0f, 1.0f);
         g.setColour (violet());
         g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         g.drawText (title, area.getX() + 20, area.getY() + 10, area.getWidth() - 40, 18,
@@ -96,141 +90,139 @@ namespace
 }
 
 BeatUploaderVSTAudioProcessorEditor::BeatUploaderVSTAudioProcessorEditor (BeatUploaderVSTAudioProcessor& p)
-    : AudioProcessorEditor (&p), audioProcessor (p)
+    : AudioProcessorEditor (&p), audioProcessor (p), uploader (std::make_shared<YouTubeUploader>())
 {
     using namespace ToxicColours;
 
     setLookAndFeel (&toxicTheme);
-    setSize (850, 530);
+    setSize (920, 600);
 
-    auto setupLabel = [this] (juce::Label& l, const juce::String& text, float size,
+    auto setupLabel = [this] (juce::Label& label, const juce::String& text, float size,
                               juce::Colour colour, bool bold)
     {
-        l.setText (text, juce::dontSendNotification);
-        l.setFont (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
-        l.setColour (juce::Label::textColourId, colour);
-        l.setMinimumHorizontalScale (1.0f);
-        addAndMakeVisible (l);
+        label.setText (text, juce::dontSendNotification);
+        label.setFont (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
+        label.setColour (juce::Label::textColourId, colour);
+        label.setMinimumHorizontalScale (1.0f);
+        addAndMakeVisible (label);
     };
 
     selectBeatButton.setButtonText ("Select Beat (WAV)");
-    selectCoverButton.setButtonText ("Select Cover Image");
-    youtubeButton.setButtonText ("Connect YouTube Channel");
+    selectCoverButton.setButtonText ("Cover Image");
+    selectVideoButton.setButtonText ("Background Video");
+    selectThumbButton.setButtonText ("Thumbnail");
+    clearVideoButton.setButtonText ("Clear");
+    clearThumbButton.setButtonText ("Clear");
+    resetTitleButton.setButtonText ("Reset");
+    resetDescButton.setButtonText ("Reset");
     uploadButton.setButtonText ("Upload Beat");
+    connectButton.setButtonText ("Connect Channel");
     uploadButton.getProperties().set ("primary", true);
-    addAndMakeVisible (selectBeatButton);
-    addAndMakeVisible (selectCoverButton);
-    addAndMakeVisible (youtubeButton);
-    addAndMakeVisible (uploadButton);
 
-    setupLabel (beatFileLabel, "No beat selected", 13.0f, muted(), false);
-    setupLabel (coverFileLabel, "No cover selected", 13.0f, muted(), false);
+    for (auto* button : { &selectBeatButton, &selectCoverButton, &selectVideoButton, &selectThumbButton,
+                          &clearVideoButton, &clearThumbButton, &resetTitleButton, &resetDescButton,
+                          &uploadButton, &connectButton })
+        addAndMakeVisible (*button);
+
+    setupLabel (beatFileLabel, emptyBeatText, 13.0f, muted(), false);
+    setupLabel (coverFileLabel, emptyCoverText, 13.0f, muted(), false);
+    setupLabel (videoFileLabel, emptyVideoText, 13.0f, muted(), false);
+    setupLabel (thumbFileLabel, emptyThumbText, 13.0f, muted(), false);
     setupLabel (nameLabel, "BEAT NAME", 11.0f, muted(), true);
-    setupLabel (bpmLabel, "BPM", 11.0f, muted(), true);
-    setupLabel (keyLabel, "KEY", 11.0f, muted(), true);
-    setupLabel (titleHeadingLabel, "YOUTUBE TITLE PREVIEW", 11.0f, muted(), true);
-    setupLabel (titlePreviewLabel, "", 15.0f, lime(), false);
-    setupLabel (youtubeLabel, "YouTube: not connected", 13.0f, muted(), false);
-    setupLabel (statusLabel, "Connect a YouTube channel, then select beat and cover.", 14.0f, lime(), false);
-    titlePreviewLabel.setJustificationType (juce::Justification::topLeft);
+    setupLabel (titleLabel, "YOUTUBE TITLE", 11.0f, muted(), true);
+    setupLabel (descLabel, "DESCRIPTION", 11.0f, muted(), true);
+    setupLabel (statusLabel, "Select your exported beat.", 14.0f, lime(), false);
+    setupLabel (channelLabel, {}, 13.0f, muted(), false);
+    channelLabel.setJustificationType (juce::Justification::centredRight);
 
     nameEditor.setFont (juce::FontOptions (16.0f));
     nameEditor.setTextToShowWhenEmpty ("e.g. Midnight Drive", muted());
-    nameEditor.onTextChange = [this] { updateTitlePreview(); };
+    nameEditor.onTextChange = [this] { applyTemplates(); };
     addAndMakeVisible (nameEditor);
 
-    bpmEditor.setFont (juce::FontOptions (16.0f));
-    bpmEditor.setInputRestrictions (6, "0123456789.");
-    bpmEditor.setTextToShowWhenEmpty ("--", muted());
-    bpmEditor.onTextChange = [this]
-    {
-        bpmEditedByUser = bpmEditor.getText().isNotEmpty();
-        updateTitlePreview();
-    };
-    addAndMakeVisible (bpmEditor);
+    titleEditor.setFont (juce::FontOptions (16.0f));
+    titleEditor.setInputRestrictions (100);
+    titleEditor.onTextChange = [this] { titleEdited = true; };
+    addAndMakeVisible (titleEditor);
 
-    keySelector.addItemList (getKeyNames(), 1);
-    keySelector.setSelectedId (1, juce::dontSendNotification);
-    keySelector.onChange = [this] { updateTitlePreview(); };
-    addAndMakeVisible (keySelector);
+    descriptionEditor.setMultiLine (true, true);
+    descriptionEditor.setReturnKeyStartsNewLine (true);
+    descriptionEditor.setFont (juce::FontOptions (14.0f));
+    descriptionEditor.setInputRestrictions (5000);
+    descriptionEditor.onTextChange = [this] { descEdited = true; };
+    addAndMakeVisible (descriptionEditor);
 
     progressBar.setPercentageDisplay (false);
     addChildComponent (progressBar);
 
     selectBeatButton.onClick  = [this] { chooseBeat(); };
     selectCoverButton.onClick = [this] { chooseCover(); };
-    youtubeButton.onClick     = [this] { connectYouTube(); };
+    selectVideoButton.onClick = [this] { chooseVideo(); };
+    selectThumbButton.onClick = [this] { chooseThumbnail(); };
     uploadButton.onClick      = [this] { startUpload(); };
+    connectButton.onClick     = [this] { connectChannel(); };
 
-    updateTitlePreview();
-    refreshYouTubeUi();
+    clearVideoButton.onClick = [this]
+    {
+        videoFile = {};
+        showEmpty (videoFileLabel, emptyVideoText);
+        repaint();
+        updateReadyStatus();
+    };
 
-    startTimerHz (10);
+    clearThumbButton.onClick = [this]
+    {
+        thumbFile = {};
+        showEmpty (thumbFileLabel, emptyThumbText);
+    };
+
+    resetTitleButton.onClick = [this]
+    {
+        titleEdited = false;
+        titleEditor.setText (makeTitle (nameEditor.getText()), false);
+    };
+
+    resetDescButton.onClick = [this]
+    {
+        descEdited = false;
+        descriptionEditor.setText (makeDescription (nameEditor.getText()), false);
+    };
+
+    applyTemplates();
+    refreshChannelLabel();
 }
 
 BeatUploaderVSTAudioProcessorEditor::~BeatUploaderVSTAudioProcessorEditor()
 {
-    stopTimer();
     setLookAndFeel (nullptr);
 }
 
-void BeatUploaderVSTAudioProcessorEditor::chooseBeat()
+void BeatUploaderVSTAudioProcessorEditor::applyTemplates()
 {
-    auto startDir = beatFile.existsAsFile() ? beatFile.getParentDirectory()
-                                            : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
-
-    chooser = std::make_unique<juce::FileChooser> ("Select your exported beat", startDir, "*.wav;*.mp3;*.flac");
-
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
-    {
-        auto f = fc.getResult();
-
-        if (! f.existsAsFile())
-            return;
-
-        beatFile = f;
-        beatFileLabel.setText (f.getFileName(), juce::dontSendNotification);
-        beatFileLabel.setColour (juce::Label::textColourId, ToxicColours::lime());
-        nameEditor.setText (f.getFileNameWithoutExtension(), true);
-        setStatus (coverImage.existsAsFile() ? "Ready. Press Upload Beat to send it unlisted."
-                                             : "Beat selected. Now choose a cover image.");
-    });
+    const auto name = nameEditor.getText();
+    if (! titleEdited)
+        titleEditor.setText (makeTitle (name), false);
+    if (! descEdited)
+        descriptionEditor.setText (makeDescription (name), false);
 }
 
-void BeatUploaderVSTAudioProcessorEditor::chooseCover()
+void BeatUploaderVSTAudioProcessorEditor::refreshChannelLabel()
 {
-    auto startDir = coverImage.existsAsFile() ? coverImage.getParentDirectory()
-                                              : juce::File::getSpecialLocation (juce::File::userPicturesDirectory);
-
-    chooser = std::make_unique<juce::FileChooser> ("Select your cover image", startDir, "*.png;*.jpg;*.jpeg");
-
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
-    {
-        auto f = fc.getResult();
-
-        if (! f.existsAsFile())
-            return;
-
-        coverImage = f;
-        coverThumb = juce::ImageFileFormat::loadFrom (f);
-        coverFileLabel.setText (f.getFileName(), juce::dontSendNotification);
-        coverFileLabel.setColour (juce::Label::textColourId, ToxicColours::lime());
-        repaint();
-        setStatus (beatFile.existsAsFile() ? "Ready. Press Upload Beat to send it unlisted."
-                                           : "Cover selected. Now choose your beat.");
-    });
+    const bool connected = uploader->isConnected();
+    channelLabel.setText (connected ? "Channel: " + uploader->getChannelName()
+                                    : "No channel connected (manual upload is available)",
+                          juce::dontSendNotification);
+    connectButton.setButtonText (connected ? "Switch Channel" : "Connect Channel");
 }
 
-juce::String BeatUploaderVSTAudioProcessorEditor::buildTitle() const
+void BeatUploaderVSTAudioProcessorEditor::updateReadyStatus()
 {
-    return makeTitle (nameEditor.getText());
-}
-
-void BeatUploaderVSTAudioProcessorEditor::updateTitlePreview()
-{
-    titlePreviewLabel.setText (buildTitle(), juce::dontSendNotification);
+    if (! beatFile.existsAsFile())
+        setStatus ("Select your exported beat.");
+    else if (! videoFile.existsAsFile() && ! coverImage.existsAsFile())
+        setStatus ("Select a cover image or a background video.");
+    else
+        setStatus ("Ready. Press Upload Beat.");
 }
 
 void BeatUploaderVSTAudioProcessorEditor::setStatus (const juce::String& text, bool isError)
@@ -243,85 +235,115 @@ void BeatUploaderVSTAudioProcessorEditor::setStatus (const juce::String& text, b
 void BeatUploaderVSTAudioProcessorEditor::setBusy (bool shouldBeBusy)
 {
     busy = shouldBeBusy;
-    uploadButton.setEnabled (! shouldBeBusy);
-    youtubeButton.setEnabled (! shouldBeBusy);
-    progressBar.setVisible (shouldBeBusy);
-
-    if (shouldBeBusy)
+    for (auto* button : { &uploadButton, &connectButton, &selectBeatButton, &selectCoverButton,
+                          &selectVideoButton, &selectThumbButton, &clearVideoButton, &clearThumbButton })
+        button->setEnabled (! busy);
+    progressBar.setVisible (busy);
+    if (busy)
         progressValue = -1.0;
 }
 
-void BeatUploaderVSTAudioProcessorEditor::refreshYouTubeUi()
+void BeatUploaderVSTAudioProcessorEditor::pickFile (const juce::String& prompt, const juce::File& startDir,
+                                                     const juce::String& wildcards,
+                                                     std::function<void (const juce::File&)> onPicked)
 {
-    YouTubeUploader uploader;
-
-    if (uploader.isConnected())
+    chooser = std::make_unique<juce::FileChooser> (prompt, startDir, wildcards);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                          [onPicked = std::move (onPicked)] (const juce::FileChooser& fileChooser)
     {
-        auto name = uploader.getChannelName();
-        youtubeButton.setButtonText ("Disconnect YouTube");
-        youtubeLabel.setText ("YouTube: " + (name.isNotEmpty() ? name : juce::String ("connected")),
-                              juce::dontSendNotification);
-        youtubeLabel.setColour (juce::Label::textColourId, ToxicColours::lime());
-    }
-    else
-    {
-        youtubeButton.setButtonText ("Connect YouTube Channel");
-        youtubeLabel.setText ("YouTube: not connected", juce::dontSendNotification);
-        youtubeLabel.setColour (juce::Label::textColourId, ToxicColours::muted());
-    }
+        const auto file = fileChooser.getResult();
+        if (file.existsAsFile())
+            onPicked (file);
+    });
 }
 
-void BeatUploaderVSTAudioProcessorEditor::connectYouTube()
+void BeatUploaderVSTAudioProcessorEditor::chooseBeat()
+{
+    const auto startDir = beatFile.existsAsFile() ? beatFile.getParentDirectory()
+                                                   : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+    pickFile ("Select your exported beat", startDir, "*.wav;*.mp3;*.flac", [this] (const juce::File& file)
+    {
+        beatFile = file;
+        showPicked (beatFileLabel, file);
+        nameEditor.setText (file.getFileNameWithoutExtension(), true);
+        updateReadyStatus();
+    });
+}
+
+void BeatUploaderVSTAudioProcessorEditor::chooseCover()
+{
+    const auto startDir = coverImage.existsAsFile() ? coverImage.getParentDirectory()
+                                                     : juce::File::getSpecialLocation (juce::File::userPicturesDirectory);
+    pickFile ("Select your cover image", startDir, "*.png;*.jpg;*.jpeg", [this] (const juce::File& file)
+    {
+        coverImage = file;
+        coverThumb = juce::ImageFileFormat::loadFrom (file);
+        showPicked (coverFileLabel, file);
+        repaint();
+        updateReadyStatus();
+    });
+}
+
+void BeatUploaderVSTAudioProcessorEditor::chooseVideo()
+{
+    const auto startDir = videoFile.existsAsFile() ? videoFile.getParentDirectory()
+                                                    : juce::File::getSpecialLocation (juce::File::userVideosDirectory);
+    pickFile ("Select a background video", startDir, "*.mp4;*.mov;*.mkv;*.avi;*.webm", [this] (const juce::File& file)
+    {
+        videoFile = file;
+        showPicked (videoFileLabel, file);
+        repaint();
+        updateReadyStatus();
+    });
+}
+
+void BeatUploaderVSTAudioProcessorEditor::chooseThumbnail()
+{
+    const auto startDir = thumbFile.existsAsFile() ? thumbFile.getParentDirectory()
+                                                    : juce::File::getSpecialLocation (juce::File::userPicturesDirectory);
+    pickFile ("Select a YouTube thumbnail", startDir, "*.png;*.jpg;*.jpeg", [this] (const juce::File& file)
+    {
+        if (file.getSize() > 2 * 1024 * 1024)
+        {
+            setStatus ("That thumbnail is over 2 MB, YouTube won't accept it.", true);
+            return;
+        }
+        thumbFile = file;
+        showPicked (thumbFileLabel, file);
+    });
+}
+
+void BeatUploaderVSTAudioProcessorEditor::connectChannel()
 {
     if (busy)
         return;
 
-    YouTubeUploader uploader;
-
-    if (uploader.isConnected())
+    if (! uploader->hasClientConfig())
     {
-        uploader.disconnect();
-        refreshYouTubeUi();
-        setStatus ("YouTube disconnected.");
-        return;
-    }
-
-    if (! uploader.hasClientConfig())
-    {
-        setStatus ("Missing youtube_client.json in " + uploader.getConfigFolder().getFullPathName(), true);
+        setStatus ("Missing youtube_client.json in " + uploader->getConfigFolder().getFullPathName(), true);
         return;
     }
 
     setBusy (true);
-    setStatus ("Opening Google sign-in. Pick the channel, then return here...");
-
+    setStatus ("Sign in with Google in your browser...");
+    auto api = uploader;
     juce::Component::SafePointer<BeatUploaderVSTAudioProcessorEditor> safeThis (this);
 
-    juce::Thread::launch ([safeThis]
+    juce::Thread::launch ([safeThis, api]
     {
-        YouTubeUploader worker;
-        auto result = worker.connect();
-
+        auto result = api->connect();
         juce::MessageManager::callAsync ([safeThis, result]
         {
-            if (safeThis != nullptr)
-                safeThis->onYouTubeConnectFinished (result);
+            if (safeThis == nullptr)
+                return;
+            safeThis->setBusy (false);
+            safeThis->refreshChannelLabel();
+            if (result.ok)
+                safeThis->setStatus ("Connected to " + result.message + ".");
+            else
+                safeThis->setStatus ("Sign-in failed: " + result.message, true);
         });
     });
-}
-
-void BeatUploaderVSTAudioProcessorEditor::onYouTubeConnectFinished (const YouTubeUploader::Result& result)
-{
-    setBusy (false);
-    refreshYouTubeUi();
-
-    if (! result.ok)
-    {
-        setStatus (result.message, true);
-        return;
-    }
-
-    setStatus ("Connected to " + result.message + ". Videos will upload unlisted to this channel.");
 }
 
 void BeatUploaderVSTAudioProcessorEditor::startUpload()
@@ -329,147 +351,174 @@ void BeatUploaderVSTAudioProcessorEditor::startUpload()
     if (busy)
         return;
 
-    YouTubeUploader uploader;
-
-    if (! uploader.isConnected())
-    {
-        setStatus ("Connect a YouTube channel first.", true);
-        return;
-    }
-
+    const bool useVideo = videoFile.existsAsFile();
     if (! beatFile.existsAsFile())
     {
         setStatus ("Select your beat first.", true);
         return;
     }
-
-    if (! coverImage.existsAsFile())
+    if (! useVideo && ! coverImage.existsAsFile())
     {
-        setStatus ("Select a cover image first.", true);
+        setStatus ("Select a cover image or a background video first.", true);
         return;
     }
 
+    const auto title = titleEditor.getText().trim();
+    if (title.isEmpty())
+    {
+        setStatus ("The title is empty.", true);
+        return;
+    }
+
+    const auto description = descriptionEditor.getText();
+    const bool useApi = uploader->isConnected();
+    auto api = uploader;
+    auto tags = makeTags();
+    auto beat = beatFile;
+    auto image = coverImage;
+    auto video = videoFile;
+    auto thumb = thumbFile;
+    auto mp4 = beatFile.withFileExtension ("mp4");
+
+    if (mp4 == video)
+        mp4 = beatFile.getSiblingFile (beatFile.getFileNameWithoutExtension() + " - youtube.mp4");
+
     setBusy (true);
     setStatus ("Rendering video...");
-
-    auto wav = beatFile;
-    auto image = coverImage;
-    auto mp4 = beatFile.withFileExtension ("mp4");
     juce::Component::SafePointer<BeatUploaderVSTAudioProcessorEditor> safeThis (this);
 
-    juce::Thread::launch ([safeThis, wav, image, mp4]
+    juce::Thread::launch ([safeThis, beat, image, video, thumb, mp4, useVideo, useApi, api, title, description, tags]
     {
-        const juce::String filter = "scale=1080:1080:force_original_aspect_ratio=increase,"
-                                    "crop=1080:1080,"
-                                    "pad=1920:1080:420:0:black";
+        juce::StringArray args { "ffmpeg", "-y", "-loglevel", "error" };
+        if (useVideo)
+            args.addArray ({ "-stream_loop", "-1", "-i", video.getFullPathName() });
+        else
+            args.addArray ({ "-loop", "1", "-framerate", "2", "-i", image.getFullPathName() });
 
-        juce::StringArray args { "ffmpeg", "-y", "-loglevel", "error",
-                                 "-loop", "1", "-framerate", "2", "-i", image.getFullPathName(),
-                                 "-i", wav.getFullPathName(), "-vf", filter, "-r", "30",
-                                 "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
-                                 "-c:a", "aac", "-b:a", "320k", "-shortest", "-movflags", "+faststart",
-                                 mp4.getFullPathName() };
+        args.addArray ({ "-i", beat.getFullPathName(), "-map", "0:v:0", "-map", "1:a:0" });
+        const juce::String filter = useVideo
+            ? (videoFillsFrame
+                ? "scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,setsar=1"
+                : "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080,pad=1920:1080:420:0:black,setsar=1")
+            : "scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080,pad=1920:1080:420:0:black";
+        args.addArray ({ "-vf", filter, "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p" });
+        if (useVideo)
+            args.addArray ({ "-preset", "veryfast", "-crf", "20" });
+        else
+            args.addArray ({ "-tune", "stillimage" });
+        args.addArray ({ "-c:a", "aac", "-b:a", "320k", "-shortest", "-movflags", "+faststart", mp4.getFullPathName() });
 
-        juce::ChildProcess proc;
+        juce::ChildProcess process;
         juce::String output;
         int exitCode = -1;
-        const bool started = proc.start (args);
-
+        const bool started = process.start (args);
         if (started)
         {
-            output = proc.readAllProcessOutput();
-            proc.waitForProcessToFinish (60000);
-            exitCode = (int) proc.getExitCode();
+            output = process.readAllProcessOutput();
+            process.waitForProcessToFinish (60000);
+            exitCode = (int) process.getExitCode();
         }
         else
         {
             output = "Could not start ffmpeg. Add it to your PATH and restart FL Studio.";
         }
 
-        juce::MessageManager::callAsync ([safeThis, mp4, started, exitCode, output]
+        const bool renderOk = started && exitCode == 0;
+        if (! renderOk || ! useApi)
+        {
+            juce::MessageManager::callAsync ([safeThis, mp4, renderOk, output]
+            {
+                if (safeThis != nullptr)
+                    safeThis->onRenderFinished (renderOk, mp4, output);
+            });
+            return;
+        }
+
+        juce::MessageManager::callAsync ([safeThis]
         {
             if (safeThis != nullptr)
-                safeThis->onRenderFinished (started && exitCode == 0, mp4, output);
+                safeThis->setStatus ("Uploading to YouTube as " + uploadPrivacy + "...");
+        });
+
+        const auto result = api->upload (mp4, thumb, title, description, tags, uploadPrivacy);
+        juce::MessageManager::callAsync ([safeThis, result]
+        {
+            if (safeThis != nullptr)
+                safeThis->onUploadFinished (result.ok, result.message, result.warning);
         });
     });
 }
 
-void BeatUploaderVSTAudioProcessorEditor::onRenderFinished (bool ok, const juce::File& video, const juce::String& log)
+void BeatUploaderVSTAudioProcessorEditor::onRenderFinished (bool ok, const juce::File& video,
+                                                             const juce::String& log)
 {
+    setBusy (false);
     if (! ok)
     {
-        setBusy (false);
         setStatus ("ffmpeg failed: " + log.trim().substring (0, 160), true);
         return;
     }
 
-    lastVideo = video;
-    setStatus ("Uploading to YouTube as unlisted...");
-    uploadToYouTube();
+    juce::SystemClipboard::copyTextToClipboard (titleEditor.getText());
+    const auto infoFile = video.getSiblingFile (video.getFileNameWithoutExtension() + " - youtube.txt");
+    infoFile.replaceWithText ("TITLE\n" + titleEditor.getText()
+                              + "\n\nDESCRIPTION\n" + descriptionEditor.getText()
+                              + "\n\nTAGS\n" + makeTags().joinIntoString (",") + "\n");
+    video.revealToUser();
+    juce::URL ("https://www.youtube.com/upload").launchInDefaultBrowser();
+    setStatus ("Done! Title copied, description saved next to the video. Drag "
+               + video.getFileName() + " into YouTube.");
 }
 
-void BeatUploaderVSTAudioProcessorEditor::uploadToYouTube()
-{
-    auto video = lastVideo;
-    auto title = buildTitle();
-    auto description = makeDescription (nameEditor.getText());
-    auto tags = makeTags();
-    juce::Component::SafePointer<BeatUploaderVSTAudioProcessorEditor> safeThis (this);
-
-    juce::Thread::launch ([safeThis, video, title, description, tags]
-    {
-        YouTubeUploader worker;
-        auto result = worker.upload (video, title, description, tags, "unlisted");
-
-        juce::MessageManager::callAsync ([safeThis, result]
-        {
-            if (safeThis != nullptr)
-                safeThis->onYouTubeUploadFinished (result);
-        });
-    });
-}
-
-void BeatUploaderVSTAudioProcessorEditor::onYouTubeUploadFinished (const YouTubeUploader::Result& result)
+void BeatUploaderVSTAudioProcessorEditor::onUploadFinished (bool ok, const juce::String& message,
+                                                             const juce::String& warning)
 {
     setBusy (false);
-
-    if (! result.ok)
+    if (! ok)
     {
-        setStatus (result.message, true);
+        setStatus ("Upload failed: " + message.substring (0, 200) + " (the video is saved next to your beat)", true);
         return;
     }
 
-    const auto url = "https://youtu.be/" + result.message;
-    juce::SystemClipboard::copyTextToClipboard (url);
-    setStatus ("Uploaded unlisted: " + url);
+    juce::SystemClipboard::copyTextToClipboard ("https://youtu.be/" + message);
+    juce::URL ("https://studio.youtube.com/video/" + message + "/edit").launchInDefaultBrowser();
+    auto status = "Uploaded as " + uploadPrivacy + ". Link copied.";
+    if (warning.isNotEmpty())
+        status += " Warning: " + warning;
+    setStatus (status, warning.isNotEmpty());
 }
 
 void BeatUploaderVSTAudioProcessorEditor::paint (juce::Graphics& g)
 {
     using namespace ToxicColours;
-
     g.fillAll (background());
-
     g.setColour (violet());
     g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
     g.drawText ("FEDDY BEATZ", 30, 16, 300, 14, juce::Justification::centredLeft);
-
     g.setColour (lime());
     g.setFont (juce::FontOptions (28.0f, juce::Font::bold));
     g.drawText ("Beat Uploader", 30, 30, 400, 40, juce::Justification::centredLeft);
 
-    drawCard (g, { 30, 84, 390, 310 }, "1   BEAT AND COVER");
-    drawCard (g, { 430, 84, 390, 310 }, "2   DETAILS");
+    drawCard (g, { 30, 84, 420, 400 }, "1   FILES");
+    drawCard (g, { 470, 84, 420, 400 }, "2   DETAILS");
 
-    juce::Rectangle<float> frame (50.0f, 278.0f, 160.0f, 90.0f);
-    juce::Rectangle<float> square (frame.getCentreX() - 45.0f, frame.getY(), 90.0f, 90.0f);
-
+    const juce::Rectangle<float> frame (50.0f, 372.0f, 160.0f, 90.0f);
+    const juce::Rectangle<float> square (frame.getCentreX() - 45.0f, frame.getY(), 90.0f, 90.0f);
     g.setColour (juce::Colours::black);
     g.fillRect (frame);
 
-    if (coverThumb.isValid())
+    if (videoFile.existsAsFile())
     {
-        juce::Graphics::ScopedSaveState state (g);
+        const auto area = videoFillsFrame ? frame : square;
+        g.setColour (violet().withAlpha (0.3f));
+        g.fillRect (area);
+        g.setColour (lime());
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText ("VIDEO (muted)", area.toNearestInt(), juce::Justification::centred);
+    }
+    else if (coverThumb.isValid())
+    {
+        juce::Graphics::ScopedSaveState saveState (g);
         g.reduceClipRegion (square.toNearestInt());
         g.drawImage (coverThumb, square,
                      juce::RectanglePlacement::centred | juce::RectanglePlacement::fillDestination);
@@ -487,43 +536,40 @@ void BeatUploaderVSTAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawRect (frame, 1.0f);
     g.setColour (muted());
     g.setFont (juce::FontOptions (12.0f));
-    g.drawFittedText ("Video: 1920 x 1080\nCover: 1080 x 1080, centered",
-                      { 226, 278, 174, 90 }, juce::Justification::centredLeft, 3);
+
+    const juce::String caption = videoFile.existsAsFile()
+        ? (videoFillsFrame ? "Video: 1920 x 1080\nBackground video fills the frame.\nYour beat is the only audio."
+                           : "Video: 1920 x 1080\nBackground video: 1080 x 1080, centered.\nYour beat is the only audio.")
+        : "Video: 1920 x 1080\nCover: 1080 x 1080, centered";
+    g.drawFittedText (caption, { 226, 372, 210, 90 }, juce::Justification::centredLeft, 4);
 }
 
 void BeatUploaderVSTAudioProcessorEditor::resized()
 {
-    selectBeatButton.setBounds  (50, 120, 350, 40);
-    beatFileLabel.setBounds     (50, 164, 350, 20);
-    selectCoverButton.setBounds (50, 196, 350, 40);
-    coverFileLabel.setBounds    (50, 240, 350, 20);
+    channelLabel.setBounds (400, 30, 300, 22);
+    connectButton.setBounds (710, 22, 180, 38);
 
-    nameLabel.setBounds         (450, 122, 350, 16);
-    nameEditor.setBounds        (450, 140, 350, 34);
-    bpmLabel.setBounds          (450, 188, 160, 16);
-    bpmEditor.setBounds         (450, 206, 160, 34);
-    keyLabel.setBounds          (630, 188, 170, 16);
-    keySelector.setBounds       (630, 206, 170, 34);
-    titleHeadingLabel.setBounds (450, 256, 350, 16);
-    titlePreviewLabel.setBounds (450, 276, 350, 100);
+    selectBeatButton.setBounds  (50, 118, 190, 32);
+    beatFileLabel.setBounds     (50, 152, 380, 18);
+    selectCoverButton.setBounds (50, 178, 190, 32);
+    coverFileLabel.setBounds    (50, 212, 380, 18);
+    selectVideoButton.setBounds (50, 238, 190, 32);
+    clearVideoButton.setBounds  (250, 242, 60, 24);
+    videoFileLabel.setBounds    (50, 272, 380, 18);
+    selectThumbButton.setBounds (50, 298, 190, 32);
+    clearThumbButton.setBounds  (250, 302, 60, 24);
+    thumbFileLabel.setBounds    (50, 332, 380, 32);
 
-    youtubeButton.setBounds     (30, 414, 250, 36);
-    youtubeLabel.setBounds      (300, 414, 520, 36);
-    uploadButton.setBounds      (30, 458, 250, 50);
-    statusLabel.setBounds       (300, 458, 520, 24);
-    progressBar.setBounds       (300, 488, 520, 12);
-}
+    nameLabel.setBounds         (490, 120, 380, 16);
+    nameEditor.setBounds        (490, 138, 380, 32);
+    titleLabel.setBounds        (490, 184, 300, 16);
+    resetTitleButton.setBounds  (810, 182, 60, 22);
+    titleEditor.setBounds       (490, 206, 380, 32);
+    descLabel.setBounds         (490, 252, 300, 16);
+    resetDescButton.setBounds   (810, 250, 60, 22);
+    descriptionEditor.setBounds (490, 274, 380, 192);
 
-void BeatUploaderVSTAudioProcessorEditor::timerCallback()
-{
-    if (bpmEditedByUser || bpmEditor.hasKeyboardFocus (true))
-        return;
-
-    auto text = formatBpm (audioProcessor.currentBPM.load());
-
-    if (text.isNotEmpty() && text != bpmEditor.getText())
-    {
-        bpmEditor.setText (text, false);
-        updateTitlePreview();
-    }
+    uploadButton.setBounds (30, 504, 250, 60);
+    statusLabel.setBounds (300, 504, 590, 28);
+    progressBar.setBounds (300, 544, 590, 12);
 }
