@@ -1,3 +1,9 @@
 Builds/
 JuceLibraryCode/
 .vs/
+website/
+Source_backup/
+
+# Local OAuth credentials and token cache
+youtube_client.json
+youtube_tokens.json
