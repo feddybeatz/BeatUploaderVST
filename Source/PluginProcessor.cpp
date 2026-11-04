@@ -1,5 +1,6 @@
 ﻿#include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <fstream>
 
 BeatUploaderVSTAudioProcessor::BeatUploaderVSTAudioProcessor()
      : AudioProcessor (BusesProperties()
@@ -93,6 +94,8 @@ bool BeatUploaderVSTAudioProcessor::hasEditor() const { return true; }
 
 juce::AudioProcessorEditor* BeatUploaderVSTAudioProcessor::createEditor()
 {
+    std::ofstream log (R"(C:\Users\fedna\AppData\Local\Temp\beatuploader-debug.log)", std::ios::app);
+    log << "createEditor\n"; log.flush();
     return new BeatUploaderVSTAudioProcessorEditor (*this);
 }
 
