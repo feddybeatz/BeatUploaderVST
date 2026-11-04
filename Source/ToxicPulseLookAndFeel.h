@@ -35,8 +35,10 @@ public:
     ToxicPulseLookAndFeel()
     {
         using namespace ToxicColours;
+
         setColour (juce::ResizableWindow::backgroundColourId, background());
         setColour (juce::Label::textColourId, juce::Colours::white);
+
         setColour (juce::TextEditor::backgroundColourId, field());
         setColour (juce::TextEditor::textColourId, juce::Colours::white);
         setColour (juce::TextEditor::outlineColourId, border());
@@ -44,6 +46,7 @@ public:
         setColour (juce::TextEditor::highlightColourId, violet().withAlpha (0.55f));
         setColour (juce::TextEditor::highlightedTextColourId, juce::Colours::white);
         setColour (juce::CaretComponent::caretColourId, lime());
+
         setColour (juce::ScrollBar::thumbColourId, dashed());
     }
 
@@ -54,27 +57,38 @@ public:
                                bool isMouseOverButton, bool isButtonDown) override
     {
         using namespace ToxicColours;
-        if (isLink (button)) return;
+
+        if (isLink (button))
+            return;
+
         auto bounds = button.getLocalBounds().toFloat().reduced (1.5f);
         const float radius = 12.0f;
         const bool enabled = button.isEnabled();
+
         if (isPrimary (button))
         {
             if (enabled)
             {
                 juce::DropShadow (lime().withAlpha (0.35f), 16, { 0, 5 }).drawForRectangle (g, bounds.toNearestInt());
+
                 auto fill = lime();
-                if (isButtonDown) fill = fill.darker (0.2f);
+                if (isButtonDown)           fill = fill.darker (0.2f);
                 else if (isMouseOverButton) fill = fill.brighter (0.15f);
                 g.setColour (fill);
             }
-            else g.setColour (raised());
+            else
+            {
+                g.setColour (raised());
+            }
+
             g.fillRoundedRectangle (bounds, radius);
             return;
         }
+
         auto fill = raised();
-        if (enabled && isButtonDown) fill = fill.darker (0.25f);
+        if (enabled && isButtonDown)           fill = fill.darker (0.25f);
         else if (enabled && isMouseOverButton) fill = fill.brighter (0.12f);
+
         g.setColour (fill);
         g.fillRoundedRectangle (bounds, radius);
         g.setColour (enabled ? (isMouseOverButton ? lime() : violet()) : border());
@@ -84,7 +98,9 @@ public:
     void drawButtonText (juce::Graphics& g, juce::TextButton& button, bool isMouseOverButton, bool) override
     {
         using namespace ToxicColours;
+
         const bool enabled = button.isEnabled();
+
         if (isLink (button))
         {
             g.setColour (isMouseOverButton ? juce::Colours::white : violetText());
@@ -92,10 +108,13 @@ public:
             g.drawText (button.getButtonText(), button.getLocalBounds(), juce::Justification::centredRight);
             return;
         }
+
         const bool primary = isPrimary (button);
         auto colour = (primary && enabled) ? ink() : lime();
+
         g.setColour (colour.withAlpha (enabled ? 1.0f : 0.4f));
         g.setFont (ToxicFonts::ui (juce::jmin (primary ? 18.0f : 15.0f, (float) button.getHeight() * 0.42f), true));
-        g.drawFittedText (button.getButtonText(), button.getLocalBounds().reduced (8, 0), juce::Justification::centred, 1);
+        g.drawFittedText (button.getButtonText(), button.getLocalBounds().reduced (8, 0),
+                          juce::Justification::centred, 1);
     }
 };

@@ -1,21 +1,29 @@
-﻿#include "PluginProcessor.h"
+#include "PluginProcessor.h"
 #include "PluginEditor.h"
-#include <fstream>
 
+//==============================================================================
 BeatUploaderVSTAudioProcessor::BeatUploaderVSTAudioProcessor()
      : AudioProcessor (BusesProperties()
-                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+                      #if ! JucePlugin_IsMidiEffect
+                       #if ! JucePlugin_IsSynth
+                        .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                       #endif
+                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                      #endif
+                       )
 {
-    // The standalone app has no use for audio input. Dropping it removes JUCE's yellow
-    // "Audio input is muted" bar. In FL Studio the plugin keeps its stereo input.
-    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone)
-        removeBus (true);
+   
 }
 
-BeatUploaderVSTAudioProcessor::~BeatUploaderVSTAudioProcessor() {}
+BeatUploaderVSTAudioProcessor::~BeatUploaderVSTAudioProcessor()
+{
+}
 
-const juce::String BeatUploaderVSTAudioProcessor::getName() const { return JucePlugin_Name; }
+//==============================================================================
+const juce::String BeatUploaderVSTAudioProcessor::getName() const
+{
+    return JucePlugin_Name;
+}
 
 bool BeatUploaderVSTAudioProcessor::acceptsMidi() const
 {
@@ -44,16 +52,46 @@ bool BeatUploaderVSTAudioProcessor::isMidiEffect() const
    #endif
 }
 
-double BeatUploaderVSTAudioProcessor::getTailLengthSeconds() const { return 0.0; }
+double BeatUploaderVSTAudioProcessor::getTailLengthSeconds() const
+{
+    return 0.0;
+}
 
-int BeatUploaderVSTAudioProcessor::getNumPrograms() { return 1; }
-int BeatUploaderVSTAudioProcessor::getCurrentProgram() { return 0; }
-void BeatUploaderVSTAudioProcessor::setCurrentProgram (int) {}
-const juce::String BeatUploaderVSTAudioProcessor::getProgramName (int) { return {}; }
-void BeatUploaderVSTAudioProcessor::changeProgramName (int, const juce::String&) {}
+int BeatUploaderVSTAudioProcessor::getNumPrograms()
+{
+    return 1;
+}
 
-void BeatUploaderVSTAudioProcessor::prepareToPlay (double, int) {}
-void BeatUploaderVSTAudioProcessor::releaseResources() {}
+int BeatUploaderVSTAudioProcessor::getCurrentProgram()
+{
+    return 0;
+}
+
+void BeatUploaderVSTAudioProcessor::setCurrentProgram (int index)
+{
+    juce::ignoreUnused (index);
+}
+
+const juce::String BeatUploaderVSTAudioProcessor::getProgramName (int index)
+{
+    juce::ignoreUnused (index);
+    return {};
+}
+
+void BeatUploaderVSTAudioProcessor::changeProgramName (int index, const juce::String& newName)
+{
+    juce::ignoreUnused (index, newName);
+}
+
+//==============================================================================
+void BeatUploaderVSTAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    juce::ignoreUnused (sampleRate, samplesPerBlock);
+}
+
+void BeatUploaderVSTAudioProcessor::releaseResources()
+{
+}
 
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -62,46 +100,64 @@ bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     juce::ignoreUnused (layouts);
     return true;
   #else
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+    const auto& out = layouts.getMainOutputChannelSet();
+    if (out != juce::AudioChannelSet::mono() && out != juce::AudioChannelSet::stereo())
         return false;
 
-    // the input bus does not exist in the standalone app; otherwise it must match the output
-    if (! layouts.getMainInputChannelSet().isDisabled()
-         && layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+   #if ! JucePlugin_IsSynth
+    // The input is optional (it's removed in the standalone app); if present it must match the output.
+    const auto& in = layouts.getMainInputChannelSet();
+    if (! in.isDisabled() && in != out)
         return false;
+   #endif
 
     return true;
   #endif
 }
 #endif
 
-void BeatUploaderVSTAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+void BeatUploaderVSTAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    juce::ignoreUnused (midiMessages);
     juce::ScopedNoDenormals noDenormals;
 
-    for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels(); ++i)
-        buffer.clear (i, 0, buffer.getNumSamples());
+    // Pass audio through untouched; silence any output channels without a matching input.
+    for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
+        buffer.clear (ch, 0, buffer.getNumSamples());
 
-    // audio passes through untouched; we only read the DAW tempo
-    if (auto* playHead = getPlayHead())
-        if (auto positionInfo = playHead->getPosition())
-            if (positionInfo->getBpm().hasValue())
-                currentBPM = *positionInfo->getBpm();
+    // Remember the DAW's tempo (0 = unknown).
+    double bpm = 0.0;
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+            if (auto b = pos->getBpm())
+                bpm = *b;
+    currentBPM.store (bpm);
 }
 
-bool BeatUploaderVSTAudioProcessor::hasEditor() const { return true; }
+//==============================================================================
+bool BeatUploaderVSTAudioProcessor::hasEditor() const
+{
+    return true;
+}
 
 juce::AudioProcessorEditor* BeatUploaderVSTAudioProcessor::createEditor()
 {
-    std::ofstream log (R"(C:\Users\fedna\AppData\Local\Temp\beatuploader-debug.log)", std::ios::app);
-    log << "createEditor\n"; log.flush();
     return new BeatUploaderVSTAudioProcessorEditor (*this);
 }
 
-void BeatUploaderVSTAudioProcessor::getStateInformation (juce::MemoryBlock&) {}
-void BeatUploaderVSTAudioProcessor::setStateInformation (const void*, int) {}
+//==============================================================================
+void BeatUploaderVSTAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    juce::ignoreUnused (destData);
+}
 
+void BeatUploaderVSTAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    juce::ignoreUnused (data, sizeInBytes);
+}
+
+//==============================================================================
+// This creates new instances of the plugin.
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new BeatUploaderVSTAudioProcessor();

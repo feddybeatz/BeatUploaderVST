@@ -10,3 +10,9 @@ BeatUploader.vst3/
 # Local OAuth credentials and token cache
 youtube_client.json
 youtube_tokens.json
+
+# bundled ffmpeg for the installer (too big for GitHub, download it separately)
+installer/ffmpeg/
+
+# token cache (the code names it youtube_token.json, singular)
+youtube_token.json
