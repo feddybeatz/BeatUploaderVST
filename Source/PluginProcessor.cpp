@@ -6,7 +6,8 @@ BeatUploaderVSTAudioProcessor::BeatUploaderVSTAudioProcessor()
                          .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
-    // the standalone app has no use for audio input: drop it (removes the yellow bar)
+    // The standalone app has no use for audio input. Dropping it removes JUCE's yellow
+    // "Audio input is muted" bar. In FL Studio the plugin keeps its stereo input.
     if (wrapperType == juce::AudioProcessor::wrapperType_Standalone)
         removeBus (true);
 }
@@ -63,9 +64,12 @@ bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
      && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
+
+    // the input bus does not exist in the standalone app; otherwise it must match the output
     if (! layouts.getMainInputChannelSet().isDisabled()
          && layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
         return false;
+
     return true;
   #endif
 }
@@ -74,8 +78,11 @@ bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 void BeatUploaderVSTAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels(); ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
+
+    // audio passes through untouched; we only read the DAW tempo
     if (auto* playHead = getPlayHead())
         if (auto positionInfo = playHead->getPosition())
             if (positionInfo->getBpm().hasValue())

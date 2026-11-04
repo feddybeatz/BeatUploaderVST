@@ -11,6 +11,9 @@ public:
     // tempo reported by the DAW (0 = unknown)
     std::atomic<double> currentBPM { 0.0 };
 
+    // lets the standalone app drop its unused audio input bus (see the constructor)
+    bool canRemoveBus (bool isInput) const override { return isInput && wrapperType == wrapperType_Standalone; }
+
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 

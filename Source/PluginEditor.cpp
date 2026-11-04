@@ -246,6 +246,12 @@ BeatUploaderVSTAudioProcessorEditor::~BeatUploaderVSTAudioProcessorEditor()
     setLookAndFeel (nullptr);
 }
 
+void BeatUploaderVSTAudioProcessorEditor::parentHierarchyChanged()
+{
+    if (auto* peer = getPeer())
+        peer->setCurrentRenderingEngine (0);
+}
+
 void BeatUploaderVSTAudioProcessorEditor::applyTemplates()
 {
     auto name = nameEditor.getText();
