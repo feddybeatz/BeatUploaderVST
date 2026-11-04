@@ -2,17 +2,13 @@
 #include "PluginEditor.h"
 
 BeatUploaderVSTAudioProcessor::BeatUploaderVSTAudioProcessor()
-#ifndef JucePlugin_PreferredChannelConfigurations
      : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       )
-#endif
+                         .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                         .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    // the standalone app has no use for audio input: drop it (removes the yellow bar)
+    if (wrapperType == juce::AudioProcessor::wrapperType_Standalone)
+        removeBus (true);
 }
 
 BeatUploaderVSTAudioProcessor::~BeatUploaderVSTAudioProcessor() {}
