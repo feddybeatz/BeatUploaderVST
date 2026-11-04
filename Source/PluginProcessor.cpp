@@ -12,7 +12,8 @@ BeatUploaderVSTAudioProcessor::BeatUploaderVSTAudioProcessor()
                      #endif
                        )
 #endif
-{}
+{
+}
 
 BeatUploaderVSTAudioProcessor::~BeatUploaderVSTAudioProcessor() {}
 
@@ -66,12 +67,9 @@ bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
      && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
-
-   #if ! JucePlugin_IsSynth
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
+    if (! layouts.getMainInputChannelSet().isDisabled()
+         && layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
         return false;
-   #endif
-
     return true;
   #endif
 }
@@ -80,11 +78,8 @@ bool BeatUploaderVSTAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 void BeatUploaderVSTAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
-
     for (auto i = getTotalNumInputChannels(); i < getTotalNumOutputChannels(); ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
-
-    // audio passes through untouched; we only read the DAW tempo
     if (auto* playHead = getPlayHead())
         if (auto positionInfo = playHead->getPosition())
             if (positionInfo->getBpm().hasValue())

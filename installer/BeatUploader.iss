@@ -32,9 +32,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 ; Release payloads currently staged at the project root.
-Source: "..\BeatUploader.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: standalone
+Source: "..\Builds\VisualStudio2026\x64\Release\Standalone Plugin\BeatUploader.exe"; DestDir: "{app}"; Flags: ignoreversion; Components: standalone
 ; In 64-bit install mode, {commoncf} resolves to C:\Program Files\Common Files.
-Source: "..\BeatUploader.vst3\*"; DestDir: "{commoncf}\VST3\BeatUploader.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: vst3
+Source: "..\Builds\VisualStudio2026\x64\Release\VST3\BeatUploader.vst3\*"; DestDir: "{commoncf}\VST3\BeatUploader.vst3"; Flags: ignoreversion recursesubdirs createallsubdirs; Components: vst3
 
 [Icons]
 Name: "{group}\BeatUploader"; Filename: "{app}\{#MyAppExeName}"; Components: standalone

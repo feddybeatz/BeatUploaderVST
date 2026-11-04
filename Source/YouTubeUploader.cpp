@@ -1,5 +1,10 @@
 #include "YouTubeUploader.h"
 
+#include <windows.h>
+#include <bcrypt.h>
+
+#pragma comment (lib, "bcrypt.lib")
+
 namespace
 {
     juce::String formEncode (const juce::String& s)
@@ -12,21 +17,30 @@ namespace
         static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
         auto& rng = juce::Random::getSystemRandom();
         juce::String s;
-
         for (int i = 0; i < length; ++i)
             s += juce::String::charToString ((juce::juce_wchar) chars[rng.nextInt ((int) sizeof (chars) - 1)]);
-
         return s;
     }
 
-    // PKCE code challenge: BASE64URL (SHA256 (verifier))
     juce::String pkceChallenge (const juce::String& verifier)
     {
-        juce::SHA256 sha (verifier.toRawUTF8(), verifier.getNumBytesAsUTF8());
-        auto raw = sha.getRawData();
-
-        return juce::Base64::toBase64 (raw.getData(), raw.getSize())
-                   .replace ("+", "-").replace ("/", "_").replace ("=", "");
+        BCRYPT_ALG_HANDLE algorithm = nullptr;
+        BCRYPT_HASH_HANDLE hash = nullptr;
+        DWORD objectLength = 0, hashLength = 0, bytesCopied = 0;
+        if (BCryptOpenAlgorithmProvider (&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0) return {};
+        const auto ol = BCryptGetProperty (algorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectLength), sizeof(objectLength), &bytesCopied, 0);
+        const auto hl = BCryptGetProperty (algorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashLength), sizeof(hashLength), &bytesCopied, 0);
+        if (ol < 0 || hl < 0 || hashLength == 0) { BCryptCloseAlgorithmProvider (algorithm, 0); return {}; }
+        juce::HeapBlock<UCHAR> hashObject ((size_t) objectLength);
+        juce::HeapBlock<UCHAR> digest ((size_t) hashLength);
+        if (BCryptCreateHash (algorithm, &hash, hashObject.getData(), objectLength, nullptr, 0, 0) < 0) { BCryptCloseAlgorithmProvider (algorithm, 0); return {}; }
+        const auto verifierBytes = verifier.toStdString();
+        const bool hashed = BCryptHashData (hash, reinterpret_cast<PUCHAR>(const_cast<char*>(verifierBytes.data())), (ULONG) verifierBytes.size(), 0) >= 0
+                         && BCryptFinishHash (hash, digest.getData(), hashLength, 0) >= 0;
+        BCryptDestroyHash (hash);
+        BCryptCloseAlgorithmProvider (algorithm, 0);
+        if (! hashed) return {};
+        return juce::Base64::toBase64 (digest.getData(), hashLength).replace ("+", "-").replace ("/", "_").replace ("=", "");
     }
 
     juce::String getQueryParam (const juce::URL& url, const juce::String& name)
@@ -34,7 +48,6 @@ namespace
         auto names  = url.getParameterNames();
         auto values = url.getParameterValues();
         auto index  = names.indexOf (name);
-
         return index >= 0 ? values[index] : juce::String();
     }
 
@@ -42,26 +55,17 @@ namespace
     {
         auto json = juce::JSON::parse (body);
         auto message = json["error"]["message"].toString();
-
-        if (message.isEmpty())
-            message = json["error_description"].toString();
-
-        if (message.isEmpty())
-            message = body.trim().substring (0, 200);
-
-        if (status == 0 && message.isEmpty())
-            message = "no response";
-
+        if (message.isEmpty()) message = json["error_description"].toString();
+        if (message.isEmpty()) message = body.trim().substring (0, 200);
+        if (status == 0 && message.isEmpty()) message = "no response";
         return "HTTP " + juce::String (status) + ": " + message;
     }
 }
 
-//==============================================================================
 juce::File YouTubeUploader::getConfigFolder() const
 {
     auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                   .getChildFile ("FeddyBeatz")
-                   .getChildFile ("BeatUploader");
+                   .getChildFile ("FeddyBeatz").getChildFile ("BeatUploader");
     dir.createDirectory();
     return dir;
 }
@@ -71,13 +75,10 @@ juce::File YouTubeUploader::getTokenFile()  const { return getConfigFolder().get
 
 bool YouTubeUploader::loadClient (juce::String& clientId, juce::String& clientSecret) const
 {
-    // accepts the file exactly as downloaded from Google Cloud ({"installed": {...}}) or a flat {"client_id", "client_secret"}
     auto json = juce::JSON::parse (getClientFile());
     auto node = json.hasProperty ("installed") ? json["installed"] : json;
-
     clientId     = node["client_id"].toString();
     clientSecret = node["client_secret"].toString();
-
     return clientId.isNotEmpty() && clientSecret.isNotEmpty();
 }
 
@@ -102,42 +103,20 @@ void YouTubeUploader::disconnect()
     getTokenFile().deleteFile();
 }
 
-//==============================================================================
 YouTubeUploader::CurlResult YouTubeUploader::runCurl (const juce::StringArray& extraArgs)
 {
     CurlResult r;
-
     juce::StringArray args;
-    args.add ("curl.exe");
-    args.add ("-s");
-    args.add ("-S");
-    args.add ("-w");
-    args.add ("<<STATUS>>%{http_code}");
+    args.add ("curl.exe"); args.add ("-s"); args.add ("-S");
+    args.add ("-w"); args.add ("<<STATUS>>%{http_code}");
     args.addArray (extraArgs);
-
     juce::ChildProcess proc;
-
-    if (! proc.start (args))
-    {
-        r.body = "Could not start curl.exe (it ships with Windows 10 and 11).";
-        return r;
-    }
-
+    if (! proc.start (args)) { r.body = "Could not start curl.exe."; return r; }
     auto out = proc.readAllProcessOutput();
     proc.waitForProcessToFinish (60 * 60 * 1000);
-
     const auto marker = out.lastIndexOf ("<<STATUS>>");
-
-    if (marker >= 0)
-    {
-        r.status = out.substring (marker + 10).getIntValue();
-        r.body   = out.substring (0, marker);
-    }
-    else
-    {
-        r.body = out;
-    }
-
+    if (marker >= 0) { r.status = out.substring (marker + 10).getIntValue(); r.body = out.substring (0, marker); }
+    else r.body = out;
     r.ok = r.status >= 200 && r.status < 300;
     return r;
 }
@@ -146,308 +125,165 @@ YouTubeUploader::CurlResult YouTubeUploader::postForm (const juce::String& url, 
 {
     juce::TemporaryFile bodyFile (".txt");
     bodyFile.getFile().replaceWithText (body);
-
     juce::StringArray args;
-    args.add ("-X");              args.add ("POST");
-    args.add (url);
-    args.add ("-H");              args.add ("Content-Type: application/x-www-form-urlencoded");
-    args.add ("--data-binary");   args.add ("@" + bodyFile.getFile().getFullPathName());
-
+    args.add ("-X"); args.add ("POST"); args.add (url);
+    args.add ("-H"); args.add ("Content-Type: application/x-www-form-urlencoded");
+    args.add ("--data-binary"); args.add ("@" + bodyFile.getFile().getFullPathName());
     return runCurl (args);
 }
 
 juce::String YouTubeUploader::getAccessToken (juce::String& error)
 {
     juce::String clientId, clientSecret;
-
-    if (! loadClient (clientId, clientSecret))
-    {
-        error = "youtube_client.json is missing in " + getConfigFolder().getFullPathName();
-        return {};
-    }
-
+    if (! loadClient (clientId, clientSecret)) { error = "youtube_client.json missing"; return {}; }
     auto refresh = juce::JSON::parse (getTokenFile())["refresh_token"].toString();
-
-    if (refresh.isEmpty())
-    {
-        error = "No channel connected yet";
-        return {};
-    }
-
+    if (refresh.isEmpty()) { error = "No channel connected yet"; return {}; }
     auto res = postForm ("https://oauth2.googleapis.com/token",
-                         "client_id=" + formEncode (clientId)
-                         + "&client_secret=" + formEncode (clientSecret)
-                         + "&refresh_token=" + formEncode (refresh)
-                         + "&grant_type=refresh_token");
-
+                         "client_id=" + formEncode (clientId) + "&client_secret=" + formEncode (clientSecret)
+                         + "&refresh_token=" + formEncode (refresh) + "&grant_type=refresh_token");
     auto access = juce::JSON::parse (res.body)["access_token"].toString();
-
-    if (! res.ok || access.isEmpty())
-    {
-        error = describeError (res.body, res.status) + " (use Switch Channel to sign in again)";
-        return {};
-    }
-
+    if (! res.ok || access.isEmpty()) { error = describeError (res.body, res.status); return {}; }
     return access;
 }
 
-//==============================================================================
 YouTubeUploader::Result YouTubeUploader::connect()
 {
     Result r;
     juce::String clientId, clientSecret;
-
-    if (! loadClient (clientId, clientSecret))
-    {
-        r.message = "Put youtube_client.json in " + getConfigFolder().getFullPathName();
-        return r;
-    }
-
+    if (! loadClient (clientId, clientSecret)) { r.message = "Put youtube_client.json in " + getConfigFolder().getFullPathName(); return r; }
     const auto verifier  = randomString (64);
     const auto challenge = pkceChallenge (verifier);
     const auto state     = randomString (24);
-
-    // tiny local web server that catches Google's redirect after you sign in
     juce::StreamingSocket server;
-
-    if (! server.createListener (0, "127.0.0.1"))
-    {
-        r.message = "Could not open a local port for the sign-in callback.";
-        return r;
-    }
-
+    if (! server.createListener (0, "127.0.0.1")) { r.message = "Could not open local port."; return r; }
     const int port = server.getBoundPort();
-
-    if (port <= 0)
-    {
-        r.message = "Could not find the local sign-in port.";
-        return r;
-    }
-
+    if (port <= 0) { r.message = "Could not find port."; return r; }
     const auto redirect = "http://127.0.0.1:" + juce::String (port);
-
     juce::URL authUrl ("https://accounts.google.com/o/oauth2/v2/auth");
     authUrl = authUrl.withParameter ("client_id", clientId)
                      .withParameter ("redirect_uri", redirect)
                      .withParameter ("response_type", "code")
-                     .withParameter ("scope", "https://www.googleapis.com/auth/youtube.upload "
-                                              "https://www.googleapis.com/auth/youtube.readonly")
+                     .withParameter ("scope", "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly")
                      .withParameter ("code_challenge", challenge)
                      .withParameter ("code_challenge_method", "S256")
                      .withParameter ("state", state)
                      .withParameter ("access_type", "offline")
                      .withParameter ("prompt", "consent select_account");
-
     authUrl.launchInDefaultBrowser();
-
     juce::String code, authError;
     bool gotCallback = false;
     const auto deadline = juce::Time::getMillisecondCounter() + 180000u;
-
     while (! gotCallback && juce::Time::getMillisecondCounter() < deadline)
     {
-        if (server.waitUntilReady (true, 1000) != 1)
-            continue;
-
+        if (server.waitUntilReady (true, 1000) != 1) continue;
         std::unique_ptr<juce::StreamingSocket> client (server.waitForNextConnection());
-
-        if (client == nullptr)
-            continue;
-
-        juce::String request;
-        char buffer[4096];
-
+        if (client == nullptr) continue;
+        juce::String request; char buffer[4096];
         while (client->waitUntilReady (true, 3000) == 1)
         {
             auto n = client->read (buffer, (int) sizeof (buffer), false);
-
-            if (n <= 0)
-                break;
-
+            if (n <= 0) break;
             request += juce::String::fromUTF8 (buffer, n);
-
-            if (request.contains ("\r\n\r\n") || request.length() > 16384)
-                break;
+            if (request.contains ("\r\n\r\n") || request.length() > 16384) break;
         }
-
         auto firstLine = request.upToFirstOccurrenceOf ("\r\n", false, false);
-        auto path = firstLine.fromFirstOccurrenceOf ("GET ", false, false)
-                             .upToLastOccurrenceOf (" HTTP", false, false).trim();
-
+        auto path = firstLine.fromFirstOccurrenceOf ("GET ", false, false).upToLastOccurrenceOf (" HTTP", false, false).trim();
         juce::URL callback ("http://127.0.0.1" + path);
-        auto gotCode  = getQueryParam (callback, "code");
+        auto gotCode = getQueryParam (callback, "code");
         auto gotError = getQueryParam (callback, "error");
         auto gotState = getQueryParam (callback, "state");
-
         const bool isCallback = gotCode.isNotEmpty() || gotError.isNotEmpty();
-
-        juce::String html = isCallback
-            ? "<html><body style=\"font-family:sans-serif;background:#050806;color:#c8ff2c;text-align:center;padding-top:80px\">"
-              "<h2>Sign-in finished</h2><p>You can close this tab and go back to FL Studio.</p></body></html>"
-            : juce::String();
-
+        juce::String html = isCallback ? "<html><body>done</body></html>" : juce::String();
         juce::String response = juce::String (isCallback ? "HTTP/1.1 200 OK" : "HTTP/1.1 404 Not Found")
-                              + "\r\nContent-Type: text/html; charset=utf-8"
-                              + "\r\nConnection: close"
-                              + "\r\nContent-Length: " + juce::String ((int) html.getNumBytesAsUTF8())
+                              + "\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: " + juce::String ((int) html.getNumBytesAsUTF8())
                               + "\r\n\r\n" + html;
-
         client->write (response.toRawUTF8(), (int) response.getNumBytesAsUTF8());
         client->close();
-
-        if (! isCallback)
-            continue;
-
+        if (! isCallback) continue;
         gotCallback = true;
-
-        if (gotError.isNotEmpty())
-            authError = "Google said: " + gotError;
-        else if (gotState != state)
-            authError = "Sign-in response did not match (try again).";
-        else
-            code = gotCode;
+        if (gotError.isNotEmpty()) authError = "Google said: " + gotError;
+        else if (gotState != state) authError = "Sign-in response did not match.";
+        else code = gotCode;
     }
-
     server.close();
-
-    if (code.isEmpty())
-    {
-        r.message = authError.isNotEmpty() ? authError : "Sign-in timed out.";
-        return r;
-    }
-
-    // trade the one-time code for tokens
+    if (code.isEmpty()) { r.message = authError.isNotEmpty() ? authError : "Sign-in timed out."; return r; }
     auto tokenRes = postForm ("https://oauth2.googleapis.com/token",
-                              "code=" + formEncode (code)
-                              + "&client_id=" + formEncode (clientId)
-                              + "&client_secret=" + formEncode (clientSecret)
-                              + "&code_verifier=" + formEncode (verifier)
-                              + "&redirect_uri=" + formEncode (redirect)
-                              + "&grant_type=authorization_code");
-
+                              "code=" + formEncode (code) + "&client_id=" + formEncode (clientId)
+                              + "&client_secret=" + formEncode (clientSecret) + "&code_verifier=" + formEncode (verifier)
+                              + "&redirect_uri=" + formEncode (redirect) + "&grant_type=authorization_code");
     auto tokenJson = juce::JSON::parse (tokenRes.body);
-    auto accessToken  = tokenJson["access_token"].toString();
+    auto accessToken = tokenJson["access_token"].toString();
     auto refreshToken = tokenJson["refresh_token"].toString();
-
-    if (! tokenRes.ok || accessToken.isEmpty())
-    {
-        r.message = describeError (tokenRes.body, tokenRes.status);
-        return r;
-    }
-
-    if (refreshToken.isEmpty())
-    {
-        r.message = "Google did not return a refresh token. Try Connect Channel again.";
-        return r;
-    }
-
-    // which channel did you pick?
+    if (! tokenRes.ok || accessToken.isEmpty()) { r.message = describeError (tokenRes.body, tokenRes.status); return r; }
+    if (refreshToken.isEmpty()) { r.message = "No refresh token returned."; return r; }
     juce::TemporaryFile authFile (".txt");
     authFile.getFile().replaceWithText ("Authorization: Bearer " + accessToken);
-
     juce::StringArray chanArgs;
-    chanArgs.add ("-H");
-    chanArgs.add ("@" + authFile.getFile().getFullPathName());
+    chanArgs.add ("-H"); chanArgs.add ("@" + authFile.getFile().getFullPathName());
     chanArgs.add ("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true");
-
     auto chan = runCurl (chanArgs);
     auto channelName = juce::JSON::parse (chan.body)["items"][0]["snippet"]["title"].toString();
-
-    if (! chan.ok || channelName.isEmpty())
-    {
-        r.message = chan.ok ? juce::String ("No YouTube channel found on that Google account.")
-                            : describeError (chan.body, chan.status);
-        return r;
-    }
-
+    if (! chan.ok || channelName.isEmpty()) { r.message = describeError (chan.body, chan.status); return r; }
     auto* saved = new juce::DynamicObject();
     saved->setProperty ("refresh_token", refreshToken);
     saved->setProperty ("channel_name", channelName);
     getTokenFile().replaceWithText (juce::JSON::toString (juce::var (saved)));
-
-    r.ok = true;
-    r.message = channelName;
+    r.ok = true; r.message = channelName;
     return r;
 }
 
-//==============================================================================
-juce::String YouTubeUploader::uploadThumbnail (const juce::String& videoId, const juce::File& image,
-                                                const juce::File& authHeaderFile)
+juce::String YouTubeUploader::uploadThumbnail (const juce::String& videoId, const juce::File& image, const juce::File& authHeaderFile)
 {
     const juce::String mime = image.hasFileExtension ("png") ? "image/png" : "image/jpeg";
-
     juce::StringArray args;
-    args.add ("-X");              args.add ("POST");
+    args.add ("-X"); args.add ("POST");
     args.add ("https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=" + videoId);
-    args.add ("-H");              args.add ("@" + authHeaderFile.getFullPathName());
-    args.add ("-H");              args.add ("Content-Type: " + mime);
-    args.add ("--data-binary");   args.add ("@" + image.getFullPathName());
-
+    args.add ("-H"); args.add ("@" + authHeaderFile.getFullPathName());
+    args.add ("-H"); args.add ("Content-Type: " + mime);
+    args.add ("--data-binary"); args.add ("@" + image.getFullPathName());
     auto res = runCurl (args);
     return res.ok ? juce::String() : describeError (res.body, res.status);
 }
 
-YouTubeUploader::Result YouTubeUploader::upload (const juce::File& video,
-                                                 const juce::File& thumbnail,
-                                                 const juce::String& title,
-                                                 const juce::String& description,
-                                                 const juce::StringArray& tags,
-                                                 const juce::String& privacy)
+YouTubeUploader::Result YouTubeUploader::upload (const juce::File& video, const juce::File& thumbnail,
+                                                 const juce::String& title, const juce::String& description,
+                                                 const juce::StringArray& tags, const juce::String& privacy,
+                                                 std::function<void (int)> onStep)
 {
     Result r;
-    if (! video.existsAsFile())
-    {
-        r.message = "Video file not found.";
-        return r;
-    }
-
+    if (! video.existsAsFile()) { r.message = "Video file not found."; return r; }
     juce::String error;
-    const auto access = getAccessToken (error);
-    if (access.isEmpty())
-    {
-        r.message = error;
-        return r;
-    }
-
+    auto access = getAccessToken (error);
+    if (access.isEmpty()) { r.message = error; return r; }
     juce::TemporaryFile authFile (".txt"), metaFile (".json"), headerDump (".txt");
     authFile.getFile().replaceWithText ("Authorization: Bearer " + access);
-
     juce::Array<juce::var> tagArray;
-    for (auto& tag : tags)
-        tagArray.add (tag);
-
+    for (auto& t : tags) tagArray.add (t);
     auto* snippet = new juce::DynamicObject();
     snippet->setProperty ("title", title);
     snippet->setProperty ("description", description);
     snippet->setProperty ("tags", tagArray);
     snippet->setProperty ("categoryId", "10");
-
     auto* status = new juce::DynamicObject();
     status->setProperty ("privacyStatus", privacy);
     status->setProperty ("selfDeclaredMadeForKids", false);
-
     auto* root = new juce::DynamicObject();
     root->setProperty ("snippet", juce::var (snippet));
     root->setProperty ("status", juce::var (status));
     metaFile.getFile().replaceWithText (juce::JSON::toString (juce::var (root), true));
 
     juce::StringArray initArgs;
-    initArgs.add ("-D");   initArgs.add (headerDump.getFile().getFullPathName());
-    initArgs.add ("-X");   initArgs.add ("POST");
+    initArgs.add ("-D"); initArgs.add (headerDump.getFile().getFullPathName());
+    initArgs.add ("-X"); initArgs.add ("POST");
     initArgs.add ("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status");
-    initArgs.add ("-H");   initArgs.add ("@" + authFile.getFile().getFullPathName());
-    initArgs.add ("-H");   initArgs.add ("Content-Type: application/json; charset=UTF-8");
-    initArgs.add ("-H");   initArgs.add ("X-Upload-Content-Type: video/mp4");
-    initArgs.add ("-H");   initArgs.add ("X-Upload-Content-Length: " + juce::String (video.getSize()));
+    initArgs.add ("-H"); initArgs.add ("@" + authFile.getFile().getFullPathName());
+    initArgs.add ("-H"); initArgs.add ("Content-Type: application/json; charset=UTF-8");
+    initArgs.add ("-H"); initArgs.add ("X-Upload-Content-Type: video/mp4");
+    initArgs.add ("-H"); initArgs.add ("X-Upload-Content-Length: " + juce::String (video.getSize()));
     initArgs.add ("--data-binary");
     initArgs.add ("@" + metaFile.getFile().getFullPathName());
-
     auto init = runCurl (initArgs);
-    if (! init.ok)
-    {
-        r.message = describeError (init.body, init.status);
-        return r;
-    }
+    if (! init.ok) { r.message = describeError (init.body, init.status); return r; }
 
     juce::String sessionUrl;
     juce::StringArray headerLines;
@@ -455,36 +291,26 @@ YouTubeUploader::Result YouTubeUploader::upload (const juce::File& video,
     for (auto& line : headerLines)
         if (line.startsWithIgnoreCase ("location:"))
             sessionUrl = line.fromFirstOccurrenceOf (":", false, false).trim();
+    if (sessionUrl.isEmpty()) { r.message = "YouTube did not return an upload address."; return r; }
 
-    if (sessionUrl.isEmpty())
-    {
-        r.message = "YouTube did not return an upload address.";
-        return r;
-    }
-
+    if (onStep) onStep (1);
     juce::StringArray putArgs;
-    putArgs.add ("-X");   putArgs.add ("PUT");
+    putArgs.add ("-X"); putArgs.add ("PUT");
     putArgs.add (sessionUrl);
-    putArgs.add ("-H");   putArgs.add ("@" + authFile.getFile().getFullPathName());
-    putArgs.add ("-H");   putArgs.add ("Content-Type: video/mp4");
-    putArgs.add ("-T");   putArgs.add (video.getFullPathName());
-
+    putArgs.add ("-H"); putArgs.add ("@" + authFile.getFile().getFullPathName());
+    putArgs.add ("-H"); putArgs.add ("Content-Type: video/mp4");
+    putArgs.add ("-T"); putArgs.add (video.getFullPathName());
     auto put = runCurl (putArgs);
     auto videoId = juce::JSON::parse (put.body)["id"].toString();
-    if (! put.ok || videoId.isEmpty())
-    {
-        r.message = describeError (put.body, put.status);
-        return r;
-    }
+    if (! put.ok || videoId.isEmpty()) { r.message = describeError (put.body, put.status); return r; }
 
     if (thumbnail.existsAsFile())
     {
-        const auto thumbError = uploadThumbnail (videoId, thumbnail, authFile.getFile());
-        if (thumbError.isNotEmpty())
-            r.warning = "thumbnail not set (" + thumbError + ")";
+        if (onStep) onStep (2);
+        auto thumbError = uploadThumbnail (videoId, thumbnail, authFile.getFile());
+        if (thumbError.isNotEmpty()) r.warning = "thumbnail not set (" + thumbError + ")";
     }
 
-    r.ok = true;
-    r.message = videoId;
+    r.ok = true; r.message = videoId;
     return r;
 }
